@@ -54,6 +54,49 @@ NOTE: `encrypt_fields = {"password"}` is also defined in the schema, which means
 
 This Plugin supports using batch processors to aggregate and process entries (logs/data) in a batch. This avoids the need for frequently submitting the data. The batch processor submits data every `5` seconds or when the data in the queue reaches `1000`. See [Batch Processor](../batch-processor.md#configuration) for more information or setting your custom configuration.
 
+### Example of default log format
+
+```json
+{
+    "response": {
+        "status": 200,
+        "size": 118,
+        "headers": {
+            "content-type": "text/plain",
+            "connection": "close",
+            "server": "APISIX/3.7.0",
+            "content-length": "12"
+        }
+    },
+    "client_ip": "127.0.0.1",
+    "upstream_latency": 3,
+    "apisix_latency": 98.999998092651,
+    "upstream": "127.0.0.1:1982",
+    "latency": 101.99999809265,
+    "server": {
+        "version": "3.7.0",
+        "hostname": "localhost"
+    },
+    "route_id": "1",
+    "start_time": 1704507612177,
+    "service_id": "",
+    "request": {
+        "method": "POST",
+        "querystring": {
+            "foo": "unknown"
+        },
+        "headers": {
+            "host": "localhost",
+            "connection": "close",
+            "content-length": "18"
+        },
+        "size": 110,
+        "uri": "/hello?foo=unknown",
+        "url": "http://localhost:1984/hello?foo=unknown"
+    }
+}
+```
+
 ## Metadata
 
 You can also set the format of the logs by configuring the Plugin metadata. The following configurations are available:
@@ -70,8 +113,17 @@ Configuring the Plugin metadata is global in scope. This means that it will take
 
 The example below shows how you can configure through the Admin API:
 
+:::note
+You can fetch the `admin_key` from `config.yaml` and save to an environment variable with the following command:
+
+```bash
+admin_key=$(yq '.deployment.admin.admin_key[0].key' conf/config.yaml | sed 's/"//g')
+```
+
+:::
+
 ```shell
-curl http://127.0.0.1:9180/apisix/admin/plugin_metadata/clickhouse-logger -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+curl http://127.0.0.1:9180/apisix/admin/plugin_metadata/clickhouse-logger -H "X-API-KEY: $admin_key" -X PUT -d '
 {
     "log_format": {
         "host": "$host",
@@ -100,7 +152,7 @@ If multiple endpoints are configured, they will be written randomly.
 The example below shows how you can enable the Plugin on a specific Route:
 
 ```shell
-curl http://127.0.0.1:9180/apisix/admin/routes/1 -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+curl http://127.0.0.1:9180/apisix/admin/routes/1 -H "X-API-KEY: $admin_key" -X PUT -d '
 {
       "plugins": {
             "clickhouse-logger": {
@@ -141,7 +193,7 @@ curl 'http://localhost:8123/?query=select%20*%20from%20default.test'
 To remove the `clickhouse-logger` Plugin, you can delete the corresponding JSON configuration from the Plugin configuration. APISIX will automatically reload and you do not have to restart for this to take effect.
 
 ```shell
-curl http://127.0.0.1:9180/apisix/admin/routes/1  -H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+curl http://127.0.0.1:9180/apisix/admin/routes/1  -H "X-API-KEY: $admin_key" -X PUT -d '
 {
     "uri": "/hello",
     "plugins": {},

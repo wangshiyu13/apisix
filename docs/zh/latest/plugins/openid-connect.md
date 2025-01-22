@@ -51,7 +51,7 @@ description: OpenID Connect（OIDC）是基于 OAuth 2.0 的身份认证协议�
 | token_endpoint_auth_method           | string  | 否     |                       |               | 令牌端点的身份验证方法。该值应是 `token_endpoint_auth_methods_supported` [授权服务器元数据](https://www.rfc-editor.org/rfc/rfc8414.html)中指定的身份验证方法之一，如发现文档中所示，例如 `client_secret_basic`， `client_secret_post`， `private_key_jwt`，或 `client_secret_jwt`。如果不支持配置的方法，则回退到`token_endpoint_auth_methods_supported` 数组中的第一个方法。                                  |
 | public_key                           | string  | 否     |                       |               | 验证令牌的公钥。                                                                                   |
 | use_jwks                             | boolean | 否     | false                 |               | 当设置为 `true` 时，则会使用身份认证服务器的 JWKS 端点来验证令牌。                                    |
-| use_pkce                             | boolean | 否     | false                 | [true, false] | 当设置为 `true` 时，则使用 PKEC（Proof Key for Code Exchange）。                                      |
+| use_pkce                             | boolean | 否     | false                 | [true, false] | 当设置为 `true` 时，则使用 PKCE（Proof Key for Code Exchange）。                                      |
 | token_signing_alg_values_expected    | string  | 否     |                       |               | 用于对令牌进行签名的算法。                                                                          |
 | set_access_token_header              | boolean | 否     | true                  | [true, false] | 在请求头设置访问令牌。默认使用请求头参数 `X-Access-Token`。                                                                              |
 | access_token_in_authorization_header | boolean | 否     | false                 | [true, false] | 当设置为 `true` 以及 `set_access_token_header` 也设置为 `true`时，将访问令牌设置在请求头参数 `Authorization`。  |
@@ -60,6 +60,8 @@ description: OpenID Connect（OIDC）是基于 OAuth 2.0 的身份认证协议�
 | set_refresh_token_header             | boolean | 否     | false                 |               | 当设置为 `true` 并且刷新令牌可用时，则会将该属性设置在`X-Refresh-Token`请求头中。                      |
 | session                              | object  | 否     |                       |               | 当设置 bearer_only 为 false 时，openid-connect 插件将使用 Authorization Code 在 IDP 上进行认证，因此你必须设置 session 相关设置。 |
 | session.secret                       | string  | 是     | 自动生成               | 16 个以上字符  | 用于 session 加密和 HMAC 计算的密钥。 |
+| session.cookie                       | object   | False    |                       |             |                                                                                                                                                                                                                                                                                                                                 |
+| session.cookie.lifetime              | integer   | False    | 3600                  |             | 用于设置 cookie 的生命周期，以秒为单位。  |
 | unauth_action                        | string   | False    | "auth"                |  ["auth","deny","pass"]            | 指定未经身份验证的请求的响应类型。 `auth` 重定向到身份提供者，`deny` 导致 401 响应，`pass` 将允许请求而无需身份验证。                                                |
 | proxy_opts                           | object  | 否    |                     |               | OpenID 服务器前面的 HTTP 代理服务器。 |
 | proxy_opts                           | object  | 否    |                       |                                  | 用来访问身份认证服务器的代理服务器。                                                                                             |
@@ -87,6 +89,7 @@ description: OpenID Connect（OIDC）是基于 OAuth 2.0 的身份认证协议�
 | cache_segment                   | string  | 否    |               |             | 可选的缓存段的名称，用于区分和区分用于令牌内省或 JWT 验证的缓存。 |
 | introspection_interval          | integer | 否    | 0             |             | 以秒为单位的缓存和内省访问令牌的 TTL。   |
 | introspection_expiry_claim      | string  | 否    |               |             | 过期声明的名称，用于控制缓存和内省访问令牌的 TTL。 |
+| introspection_addon_headers     | string[] | 否    |               |             | `introspection_addon_headers` 是字符串列表，用于配置额外添加到内省 HTTP 请求中的请求头，如果配置的请求头不存在于源请求中，它将被忽略。|
 
 注意：schema 中还定义了 `encrypt_fields = {"client_secret"}`，这意味着该字段将会被加密存储在 etcd 中。具体参考 [加密存储字段](../plugin-develop.md#加密存储字段)。
 
@@ -114,9 +117,19 @@ description: OpenID Connect（OIDC）是基于 OAuth 2.0 的身份认证协议�
 
 以下示例是在路由上启用插件。该路由将通过内省请求头中提供的令牌来保护上游：
 
+:::note
+
+您可以这样从 `config.yaml` 中获取 `admin_key` 并存入环境变量：
+
+```bash
+admin_key=$(yq '.deployment.admin.admin_key[0].key' conf/config.yaml | sed 's/"//g')
+```
+
+:::
+
 ```shell
 curl http://127.0.0.1:9180/apisix/admin/routes/1 \
--H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+-H "X-API-KEY: $admin_key" -X PUT -d '
 {
   "uri": "/get",
   "plugins":{
@@ -160,7 +173,7 @@ curl -i -X GET http://127.0.0.1:9080/get -H "Authorization: Bearer {JWT_TOKEN}"
 
 ```shell
 curl http://127.0.0.1:9180/apisix/admin/routes/1 \
--H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+-H "X-API-KEY: $admin_key" -X PUT -d '
 {
   "uri": "/get",
   "plugins":{
@@ -195,7 +208,7 @@ curl http://127.0.0.1:9180/apisix/admin/routes/1 \
 
 ```shell
 curl http://127.0.0.1:9180/apisix/admin/routes/1 \
--H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+-H "X-API-KEY: $admin_key" -X PUT -d '
 {
   "uri": "/get",
   "plugins": {
@@ -244,7 +257,7 @@ the error request to the redirect_uri path, but there's no session state found
 
 #### 2. 缺少 Session Secret
 
-如果您在[standalone 模式](/apisix/product/deployment-modes#standalone-mode)下部署 APISIX，请确保配置了 `session.secret`。
+如果您在[standalone 模式](../../../en/latest/deployment-modes.md#standalone)下部署 APISIX，请确保配置了 `session.secret`。
 
 用户 session 作为 cookie 存储在浏览器中，并使用 session 密钥进行加密。如果没有通过 `session.secret` 属性配置机密，则会自动生成机密并将其保存到 etcd。然而，在独立模式下，etcd 不再是配置中心。因此，您应该在 YAML 配置中心 `apisix.yaml` 中为此插件显式配置 `session.secret`。
 

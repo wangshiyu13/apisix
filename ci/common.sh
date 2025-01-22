@@ -23,7 +23,7 @@ export_version_info() {
 
 export_or_prefix() {
     export OPENRESTY_PREFIX="/usr/local/openresty"
-    export APISIX_MAIN="https://raw.githubusercontent.com/apache/apisix/master/apisix-master-0.rockspec"
+
     export PATH=$OPENRESTY_PREFIX/nginx/sbin:$OPENRESTY_PREFIX/luajit/bin:$OPENRESTY_PREFIX/bin:$PATH
     export OPENSSL_PREFIX=$OPENRESTY_PREFIX/openssl3
     export OPENSSL_BIN=$OPENSSL_PREFIX/bin/openssl
@@ -33,6 +33,10 @@ create_lua_deps() {
     echo "Create lua deps"
 
     make deps
+
+    # just for jwt-auth test
+    luarocks install lua-resty-openssl --tree deps
+
     # maybe reopen this feature later
     # luarocks install luacov-coveralls --tree=deps --local > build.log 2>&1 || (cat build.log && exit 1)
     # for github action cache
@@ -74,6 +78,13 @@ install_curl () {
     cd ..
     rm -rf curl-${CURL_VERSION}
     curl -V
+}
+
+install_apisix_runtime() {
+    export runtime_version=${APISIX_RUNTIME}
+    wget "https://raw.githubusercontent.com/api7/apisix-build-tools/apisix-runtime/${APISIX_RUNTIME}/build-apisix-runtime.sh"
+    chmod +x build-apisix-runtime.sh
+    ./build-apisix-runtime.sh latest
 }
 
 install_grpcurl () {
@@ -171,7 +182,9 @@ GRPC_SERVER_EXAMPLE_VER=20210819
 
 linux_get_dependencies () {
     apt update
-    apt install -y cpanminus build-essential libncurses5-dev libreadline-dev libssl-dev perl libpcre3 libpcre3-dev libldap2-dev
+    apt install -y cpanminus build-essential libncurses5-dev libreadline-dev libssl-dev perl libpcre3 libpcre3-dev
+    apt-get install -y libyaml-dev
+    wget https://github.com/mikefarah/yq/releases/download/3.4.1/yq_linux_amd64 -O /usr/bin/yq && sudo chmod +x /usr/bin/yq
 }
 
 function start_grpc_server_example() {
@@ -193,4 +206,25 @@ function start_grpc_server_example() {
 
         ss -lntp | grep 10051 | grep grpc_server && break
     done
+}
+
+
+function start_sse_server_example() {
+    # build sse_server_example
+    pushd t/sse_server_example
+    go build
+    ./sse_server_example 7737 2>&1 &
+
+    for (( i = 0; i <= 10; i++ )); do
+        sleep 0.5
+        SSE_PROC=`ps -ef | grep sse_server_example | grep -v grep || echo "none"`
+        if [[ $SSE_PROC == "none" || "$i" -eq 10 ]]; then
+            echo "failed to start sse_server_example"
+            ss -antp | grep 7737 || echo "no proc listen port 7737"
+            exit 1
+        else
+            break
+        fi
+    done
+    popd
 }

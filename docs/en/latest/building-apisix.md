@@ -48,7 +48,7 @@ To build and package APISIX for a specific platform, see [apisix-build-tools](ht
 First of all, we need to specify the version `APISIX_VERSION` to be installed:
 
 ```shell
-APISIX_VERSION='3.7.0'
+APISIX_VERSION='3.11.0'
 ```
 
 Then, you can run the following command to clone the APISIX source code from Github:
@@ -252,12 +252,6 @@ For the error `Error unknown directive "lua_package_path" in /API_ASPIX/apisix/t
 
   ```shell
   export PATH=/usr/local/openresty/nginx/sbin:$PATH
-  ```
-
-- macOS default installation path (view homebrew):
-
-  ```shell
-  export PATH=/usr/local/opt/openresty/nginx/sbin:$PATH
   ```
 
 #### Running a specific test case

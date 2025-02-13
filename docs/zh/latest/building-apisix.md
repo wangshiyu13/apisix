@@ -47,7 +47,7 @@ import TabItem from '@theme/TabItem';
 首先，我们需要指定需要安装的版本`APISIX_VERSION`:
 
 ```shell
-APISIX_VERSION='3.7.0'
+APISIX_VERSION='3.11.0'
 ```
 
 然后，你可以运行以下命令，从 Github 克隆 APISIX 源码：
@@ -250,12 +250,6 @@ APISIX 的一些特性需要在 OpenResty 中引入额外的 NGINX 模块。
 
   ```shell
   export PATH=/usr/local/openresty/nginx/sbin:$PATH
-  ```
-
-- macOS 通过 `homebrew` 的默认安装路径：
-
-  ```shell
-  export PATH=/usr/local/opt/openresty/nginx/sbin:$PATH
   ```
 
 ### 运行指定的测试用例

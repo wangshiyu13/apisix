@@ -49,9 +49,18 @@ description: API 网关 Apache APISIX syslog 插件可用于将日志推送到 S
 | retry_delay      | integer | 否     |              | [0, ...]      | 重试连接到日志服务器或重试向日志服务器发送日志消息之前的时间延迟（以毫秒为单位）。                                                           |
 | pool_size        | integer | 否     | 5            | [5, ...]      | `sock：keepalive` 使用的 Keepalive 池大小。                                                                                              |
 | log_format             | object  | 否   |          |         | 以 JSON 格式的键值对来声明日志格式。对于值部分，仅支持字符串。如果是以 `$` 开头，则表明是要获取 [APISIX 变量](../apisix-variable.md) 或 [NGINX 内置变量](http://nginx.org/en/docs/varindex.html)。 |
-| include_req_body | boolean | 否     | false        |               | 当设置为 `true` 时包括请求体。                                                                                                        |
+| include_req_body | boolean | 否     | false        |  [false, true]    | 当设置为 `true` 时包括请求体。                                                                                                        |
+| include_req_body_expr   | array         | 否   |       |               | 当 `include_req_body` 属性设置为 `true` 时的过滤器。只有当此处设置的表达式求值为 `true` 时，才会记录请求体。有关更多信息，请参阅 [lua-resty-expr](https://github.com/api7/lua-resty-expr) 。    |
+| include_resp_body       | boolean       | 否   | false | [false, true] | 当设置为 `true` 时，包含响应体。                                                                                                                               |
+| include_resp_body_expr  | array         | 否   |       |               | 当 `include_resp_body` 属性设置为 `true` 时进行过滤响应体，并且只有当此处设置的表达式计算结果为 `true` 时，才会记录响应体。更多信息，请参考 [lua-resty-expr](https://github.com/api7/lua-resty-expr)。 |
 
 该插件支持使用批处理器来聚合并批量处理条目（日志/数据）。这样可以避免插件频繁地提交数据，默认情况下批处理器每 `5` 秒钟或队列中的数据达到 `1000` 条时提交数据，如需了解批处理器相关参数设置，请参考 [Batch-Processor](../batch-processor.md#配置)。
+
+### 默认日志格式示例
+
+```text
+"<46>1 2024-01-06T02:30:59.145Z 127.0.0.1 apisix 82324 - - {\"response\":{\"status\":200,\"size\":141,\"headers\":{\"content-type\":\"text/plain\",\"server\":\"APISIX/3.7.0\",\"transfer-encoding\":\"chunked\",\"connection\":\"close\"}},\"route_id\":\"1\",\"server\":{\"hostname\":\"baiyundeMacBook-Pro.local\",\"version\":\"3.7.0\"},\"request\":{\"uri\":\"/opentracing\",\"url\":\"http://127.0.0.1:1984/opentracing\",\"querystring\":{},\"method\":\"GET\",\"size\":155,\"headers\":{\"content-type\":\"application/x-www-form-urlencoded\",\"host\":\"127.0.0.1:1984\",\"user-agent\":\"lua-resty-http/0.16.1 (Lua) ngx_lua/10025\"}},\"upstream\":\"127.0.0.1:1982\",\"apisix_latency\":100.99999809265,\"service_id\":\"\",\"upstream_latency\":1,\"start_time\":1704508259044,\"client_ip\":\"127.0.0.1\",\"latency\":101.99999809265}\n"
+```
 
 ## 插件元数据
 
@@ -69,9 +78,19 @@ description: API 网关 Apache APISIX syslog 插件可用于将日志推送到 S
 
 你可以通过以下命令在指定路由中启用该插件：
 
+:::note
+
+您可以这样从 `config.yaml` 中获取 `admin_key` 并存入环境变量：
+
+```bash
+admin_key=$(yq '.deployment.admin.admin_key[0].key' conf/config.yaml | sed 's/"//g')
+```
+
+:::
+
 ```shell
 curl http://127.0.0.1:9180/apisix/admin/routes/1 \
--H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+-H "X-API-KEY: $admin_key" -X PUT -d '
 {
     "plugins": {
         "syslog": {
@@ -110,7 +129,7 @@ hello, world
 
 ```shell
 curl http://127.0.0.1:9180/apisix/admin/routes/1  \
--H 'X-API-KEY: edd1c9f034335f136f87ad84b625c8f1' -X PUT -d '
+-H "X-API-KEY: $admin_key" -X PUT -d '
 {
     "methods": ["GET"],
     "uri": "/hello",

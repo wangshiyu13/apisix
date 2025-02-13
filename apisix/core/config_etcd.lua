@@ -227,7 +227,7 @@ local function do_run_watch(premature)
             log.warn("watch canceled by etcd, res: ", inspect(res))
             if res.result.compact_revision then
                 watch_ctx.rev = tonumber(res.result.compact_revision)
-                log.warn("etcd compacted, compact_revision=", watch_ctx.rev)
+                log.error("etcd compacted, compact_revision=", watch_ctx.rev)
                 produce_res(nil, "compacted")
             end
             cancel_watch(http_cli)
@@ -257,6 +257,11 @@ local function do_run_watch(premature)
         end
 
         local rev = tonumber(res.result.header.revision)
+        if rev == nil then
+            log.warn("receive a invalid revision header, header: ", inspect(res.result.header))
+            cancel_watch(http_cli)
+            break
+        end
         if rev > watch_ctx.rev then
             watch_ctx.rev = rev + 1
         end
@@ -284,7 +289,8 @@ local function run_watch(premature)
 
     local ok, err = ngx_thread_wait(run_watch_th, check_worker_th)
     if not ok then
-        log.error("check_worker thread terminates failed, retart checker, error: " .. err)
+        log.error("run_watch or check_worker thread terminates failed",
+                        " restart those threads, error: ", inspect(err))
     end
 
     ngx_thread_kill(run_watch_th)
@@ -538,7 +544,7 @@ local function load_full_data(self, dir_res, headers)
             end
 
             if data_valid and self.checker then
-                data_valid, err = self.checker(item.value)
+                data_valid, err = self.checker(item.value, item.key)
                 if not data_valid then
                     log.error("failed to check item data of [", self.key,
                               "] err:", err, " ,val: ", json.delay_encode(item.value))
@@ -629,7 +635,7 @@ local function sync_data(self)
     if not dir_res then
         if err == "compacted" then
             self.need_reload = true
-            log.warn("waitdir [", self.key, "] err: ", err,
+            log.error("waitdir [", self.key, "] err: ", err,
                      ", will read the configuration again via readdir")
             return false
         end
@@ -651,6 +657,7 @@ local function sync_data(self)
     -- waitdir will return [res] even for self.single_item = true
     for _, res in ipairs(res_copy) do
         local key
+        local data_valid = true
         if self.single_item then
             key = self.key
         else
@@ -658,33 +665,37 @@ local function sync_data(self)
         end
 
         if res.value and not self.single_item and type(res.value) ~= "table" then
-            self:upgrade_version(res.modifiedIndex)
-            return false, "invalid item data of [" .. self.key .. "/" .. key
-                            .. "], val: " .. res.value
-                            .. ", it should be an object"
+            data_valid = false
+            log.error("invalid item data of [", self.key .. "/" .. key,
+                      "], val: ", res.value,
+                      ", it should be an object")
         end
 
-        if res.value and self.item_schema then
-            local ok, err = check_schema(self.item_schema, res.value)
-            if not ok then
-                self:upgrade_version(res.modifiedIndex)
-
-                return false, "failed to check item data of ["
-                                .. self.key .. "] err:" .. err
-            end
-
-            if self.checker then
-                local ok, err = self.checker(res.value)
-                if not ok then
-                    self:upgrade_version(res.modifiedIndex)
-
-                    return false, "failed to check item data of ["
-                                    .. self.key .. "] err:" .. err
-                end
+        if data_valid and res.value and self.item_schema then
+            data_valid, err = check_schema(self.item_schema, res.value)
+            if not data_valid then
+                log.error("failed to check item data of [", self.key,
+                          "] err:", err, " ,val: ", json.encode(res.value))
             end
         end
 
+        if data_valid and res.value and self.checker then
+            data_valid, err = self.checker(res.value, res.key)
+            if not data_valid then
+                log.error("failed to check item data of [", self.key,
+                          "] err:", err, " ,val: ", json.delay_encode(res.value))
+            end
+        end
+
+        -- the modifiedIndex tracking should be updated regardless of the validity of the config
         self:upgrade_version(res.modifiedIndex)
+
+        if not data_valid then
+            -- do not update the config cache when the data is invalid
+            -- invalid data should only cancel this config item update, not discard
+            -- the remaining events, use continue instead of loop break and return
+            goto CONTINUE
+        end
 
         if res.dir then
             if res.value then
@@ -758,6 +769,8 @@ local function sync_data(self)
         end
 
         self.conf_version = self.conf_version + 1
+
+        ::CONTINUE::
     end
 
     return self.values
@@ -840,7 +853,7 @@ local function _automatic_fetch(premature, self)
                             i = i + 1
                             ngx_sleep(backoff_duration)
                             _, err = sync_data(self)
-                            if not err or not string.find(err, err_etcd_unhealthy_all) then
+                            if not err or not core_str.find(err, err_etcd_unhealthy_all) then
                                 log.warn("reconnected to etcd")
                                 reconnected = true
                                 break

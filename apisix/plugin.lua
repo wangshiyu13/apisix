@@ -34,6 +34,9 @@ local type          = type
 local local_plugins = core.table.new(32, 0)
 local tostring      = tostring
 local error         = error
+-- make linter happy to avoid error: getting the Lua global "load"
+-- luacheck: globals load, ignore lua_load
+local lua_load          = load
 local is_http       = ngx.config.subsystem == "http"
 local local_plugins_hash    = core.table.new(0, 32)
 local stream_local_plugins  = core.table.new(32, 0)
@@ -47,6 +50,9 @@ local merged_stream_route = core.lrucache.new({
     ttl = 300, count = 512
 })
 local expr_lrucache = core.lrucache.new({
+    ttl = 300, count = 512
+})
+local meta_pre_func_load_lrucache = core.lrucache.new({
     ttl = 300, count = 512
 })
 local local_conf
@@ -183,6 +189,10 @@ local function load_plugin(name, plugins_list, plugin_type)
 
     if plugin.init then
         plugin.init()
+    end
+
+    if plugin.workflow_handler then
+        plugin.workflow_handler()
     end
 
     return
@@ -331,6 +341,8 @@ function _M.load(config)
         return local_plugins
     end
 
+    local exporter = require("apisix.plugins.prometheus.exporter")
+
     if ngx.config.subsystem == "http" then
         if not http_plugin_names then
             core.log.error("failed to read plugin list from local file")
@@ -343,6 +355,15 @@ function _M.load(config)
             local ok, err = load(http_plugin_names, wasm_plugin_names)
             if not ok then
                 core.log.error("failed to load plugins: ", err)
+            end
+
+            local enabled = core.table.array_find(http_plugin_names, "prometheus") ~= nil
+            local active  = exporter.get_prometheus() ~= nil
+            if not enabled then
+                exporter.destroy()
+            end
+            if enabled and not active then
+                exporter.http_init()
             end
         end
     end
@@ -569,7 +590,7 @@ end
 
 
 local function merge_service_route(service_conf, route_conf)
-    local new_conf = core.table.deepcopy(service_conf)
+    local new_conf = core.table.deepcopy(service_conf, { shallows = {"self.value.upstream.parent"}})
     new_conf.value.service_id = new_conf.value.id
     new_conf.value.id = route_conf.value.id
     new_conf.modifiedIndex = route_conf.modifiedIndex
@@ -643,7 +664,7 @@ end
 local function merge_service_stream_route(service_conf, route_conf)
     -- because many fields in Service are not supported by stream route,
     -- so we copy the stream route as base object
-    local new_conf = core.table.deepcopy(route_conf)
+    local new_conf = core.table.deepcopy(route_conf, { shallows = {"self.value.upstream.parent"}})
     if service_conf.value.plugins then
         for name, conf in pairs(service_conf.value.plugins) do
             if not new_conf.value.plugins then
@@ -691,7 +712,8 @@ local function merge_consumer_route(route_conf, consumer_conf, consumer_group_co
         return route_conf
     end
 
-    local new_route_conf = core.table.deepcopy(route_conf)
+    local new_route_conf = core.table.deepcopy(route_conf,
+                            { shallows = {"self.value.upstream.parent"}})
 
     if consumer_group_conf then
         for name, conf in pairs(consumer_group_conf.value.plugins) do
@@ -890,10 +912,23 @@ local function check_single_plugin_schema(name, plugin_conf, schema_type, skip_d
                 .. name .. " err: " .. err
         end
 
-        if plugin_conf._meta and plugin_conf._meta.filter then
-            ok, err = expr.new(plugin_conf._meta.filter)
-            if not ok then
-                return nil, "failed to validate the 'vars' expression: " .. err
+        if plugin_conf._meta then
+            if plugin_conf._meta.filter then
+                ok, err = expr.new(plugin_conf._meta.filter)
+                if not ok then
+                    return nil, "failed to validate the 'vars' expression: " .. err
+                end
+            end
+
+            if plugin_conf._meta.pre_function then
+                local pre_function, err = meta_pre_func_load_lrucache(plugin_conf._meta.pre_function
+                                          , "",
+                                          lua_load,
+                                          plugin_conf._meta.pre_function, "meta pre_function")
+                if not pre_function then
+                    return nil, "failed to load _meta.pre_function in plugin " .. name .. ": "
+                                 .. err
+                end
             end
         end
     end
@@ -906,7 +941,8 @@ local enable_data_encryption
 local function enable_gde()
     if enable_data_encryption == nil then
         enable_data_encryption =
-            core.table.try_read_attr(local_conf, "apisix", "data_encryption", "enable")
+            core.table.try_read_attr(local_conf, "apisix", "data_encryption",
+                    "enable_encrypt_fields") and (core.config.type == "etcd")
         _M.enable_data_encryption = enable_data_encryption
     end
 
@@ -922,7 +958,10 @@ local function get_plugin_schema_for_gde(name, schema_type)
 
     local schema
     if schema_type == core.schema.TYPE_CONSUMER then
-        schema = plugin_schema.consumer_schema
+        -- when we use a non-auth plugin in the consumer,
+        -- where the consumer_schema field does not exist,
+        -- we need to fallback to it's schema for encryption and decryption.
+        schema = plugin_schema.consumer_schema or plugin_schema.schema
     elseif schema_type == core.schema.TYPE_METADATA then
         schema = plugin_schema.metadata_schema
     else
@@ -1029,7 +1068,7 @@ check_plugin_metadata = function(item)
     local ok, err = check_single_plugin_schema(item.id, item,
                                                core.schema.TYPE_METADATA, true)
     if ok and enable_gde() then
-        decrypt_conf(item.name, item, core.schema.TYPE_METADATA)
+        decrypt_conf(item.id, item, core.schema.TYPE_METADATA)
     end
 
     return ok, err
@@ -1110,6 +1149,17 @@ function _M.stream_plugin_checker(item, in_cp)
     return true
 end
 
+local function run_meta_pre_function(conf, api_ctx, name)
+    if conf._meta and conf._meta.pre_function then
+        local _, pre_function = pcall(meta_pre_func_load_lrucache(conf._meta.pre_function, "",
+                                lua_load,
+                                conf._meta.pre_function, "meta pre_function"))
+        local ok, err = pcall(pre_function, conf, api_ctx)
+        if not ok then
+            core.log.error("pre_function execution for plugin ", name, " failed: ", err)
+        end
+    end
+end
 
 function _M.run_plugin(phase, plugins, api_ctx)
     local plugin_run = false
@@ -1149,6 +1199,7 @@ function _M.run_plugin(phase, plugins, api_ctx)
                     goto CONTINUE
                 end
 
+                run_meta_pre_function(conf, api_ctx, plugins[i]["name"])
                 plugin_run = true
                 api_ctx._plugin_name = plugins[i]["name"]
                 local code, body = phase_func(conf, api_ctx)
@@ -1187,6 +1238,7 @@ function _M.run_plugin(phase, plugins, api_ctx)
         local conf = plugins[i + 1]
         if phase_func and meta_filter(api_ctx, plugins[i]["name"], conf) then
             plugin_run = true
+            run_meta_pre_function(conf, api_ctx, plugins[i]["name"])
             api_ctx._plugin_name = plugins[i]["name"]
             phase_func(conf, api_ctx)
             api_ctx._plugin_name = nil

@@ -155,10 +155,20 @@ local function create_checker(upstream)
         end
     end
 
+    local check_idx, err = core.config_util.add_clean_handler(healthcheck_parent, release_checker)
+    if not check_idx then
+        upstream.is_creating_checker = nil
+        checker:clear()
+        checker:stop()
+        core.log.error("failed to add clean handler, err:",
+            err, " healthcheck parent:", core.json.delay_encode(healthcheck_parent, true))
+
+        return nil
+    end
+
     healthcheck_parent.checker = checker
     healthcheck_parent.checker_upstream = upstream
-    healthcheck_parent.checker_idx =
-        core.config_util.add_clean_handler(healthcheck_parent, release_checker)
+    healthcheck_parent.checker_idx = check_idx
 
     upstream.is_creating_checker = nil
 
@@ -290,10 +300,10 @@ function _M.set_by_route(route, api_ctx)
                 return HTTP_CODE_UPSTREAM_UNAVAILABLE, "invalid nodes format: " .. err
             end
 
-            up_conf.nodes = new_nodes
-            up_conf.original_nodes = up_conf.nodes
-
             local new_up_conf = core.table.clone(up_conf)
+            new_up_conf.nodes = new_nodes
+            new_up_conf.original_nodes = up_conf.nodes
+
             core.log.info("discover new upstream from ", up_conf.service_name, ", type ",
                           up_conf.discovery_type, ": ",
                           core.json.delay_encode(new_up_conf, true))
@@ -449,6 +459,18 @@ local function check_upstream_conf(in_dp, conf)
         local ok, err = core.schema.check(core.schema.upstream, conf)
         if not ok then
             return false, "invalid configuration: " .. err
+        end
+
+        if conf.nodes and not core.table.isarray(conf.nodes) then
+            local port
+            for addr,_ in pairs(conf.nodes) do
+                _, port = core.utils.parse_addr(addr)
+                if port then
+                    if port < 1 or port > 65535 then
+                        return false, "invalid port " .. tostring(port)
+                    end
+                end
+            end
         end
 
         local ssl_id = conf.tls and conf.tls.client_cert_id
